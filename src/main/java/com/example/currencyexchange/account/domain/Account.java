@@ -4,12 +4,9 @@ import com.example.currencyexchange.account.domain.dto.AccountView;
 import com.example.currencyexchange.account.exception.InsufficientFundsException;
 import com.example.currencyexchange.shared.ddd.AbstractAggregateEntity;
 import jakarta.persistence.*;
-import jakarta.validation.constraints.NotNull;
-import jakarta.validation.constraints.Size;
 import lombok.*;
 
 import java.math.BigDecimal;
-import java.math.RoundingMode;
 import java.util.HashSet;
 import java.util.Optional;
 import java.util.Set;
@@ -17,14 +14,12 @@ import java.util.stream.Collectors;
 
 
 /**
- * Represents the Account aggregate root in the domain model.
+ * Represents the <strong>Account</strong> aggregate root.
  *
- * This class is the central entity for all account-related operations. It encapsulates the user's
- * personal information (first name, last name) and a collection of {@link AccountWallet}s,
- * which hold balances in different currencies. As an aggregate root, it is responsible for
- * maintaining its own consistency and enforcing all business rules related to its state and
- * the state of its child entities (wallets). All operations that modify an account or its
- * wallets should go through this class.
+ * <p>This entity is the core of the account domain, managing user information and a collection
+ * of {@link AccountWallet}s for different currencies. As an aggregate root, it enforces all
+ * business rules and ensures the consistency of the account and its associated wallets.
+ * All modifications must be performed through this class.</p>
  */
 @Entity
 @Builder
@@ -33,48 +28,46 @@ import java.util.stream.Collectors;
 @NoArgsConstructor(access = AccessLevel.PACKAGE)
 class Account extends AbstractAggregateEntity {
 
-    @NotNull
-    @Column(unique = true)
-    private String accountId;
+    @Embedded
+    @AttributeOverride(name = "value", column = @Column(name = "accountId", unique = true, nullable = false))
+    private AccountId accountId;
 
-    @NotNull
-    @Size(max = 50)
-    @Column(length = 50)
-    private String firstName;
-
-    @NotNull
-    @Size(max = 50)
-    @Column(length = 50)
-    private String lastName;
+    @Embedded
+    private PersonName personName;
 
     @Builder.Default
     @OneToMany(mappedBy = "account", cascade = CascadeType.ALL, fetch = FetchType.EAGER, orphanRemoval = true)
     private Set<AccountWallet> accountWallets = new HashSet<>();
 
     /**
-     * The main business method of the aggregate, responsible for currency exchange.
-     * It coordinates operations on the wallets belonging to this account.
-     * @param fromCurrency The source currency code.
-     * @param toCurrency The target currency code.
-     * @param amount The amount to exchange.
-     * @param rate The exchange rate.
+     * Executes a currency exchange between two wallets within the account.
+     *
+     * <p>This method debits the source currency wallet and credits the target currency wallet
+     * based on the provided exchange rate. If the target wallet does not exist, it will be
+     * created automatically.</p>
+     *
+     * @param amountToExchange The amount and currency to be exchanged.
+     * @param rate The exchange rate to apply.
+     * @throws InsufficientFundsException if the source wallet has insufficient funds or does not exist.
      */
-    void exchange(String fromCurrency, String toCurrency, BigDecimal amount, BigDecimal rate) {
-        AccountWallet fromWallet = findWalletByCurrency(fromCurrency)
-                .orElseThrow(() -> new InsufficientFundsException("No funds in currency " + fromCurrency + ". Please make a prior exchange or top up the account."));
+    void exchange(Money amountToExchange, ExchangeRate rate) {
+        AccountWallet fromWallet = findWalletByCurrency(amountToExchange.currency())
+                .orElseThrow(() -> new InsufficientFundsException("No funds in currency " + amountToExchange.currency().code() + ". Please make a prior exchange or top up the account."));
 
-        AccountWallet toWallet = findOrCreateWalletByCurrency(toCurrency);
+        Money amountToReceive = rate.exchange(amountToExchange);
+        AccountWallet toWallet = findOrCreateWalletByCurrency(amountToReceive.currency());
 
-        fromWallet.withdraw(amount);
-
-        BigDecimal amountToReceive = amount.multiply(rate).setScale(2, RoundingMode.HALF_UP);
+        fromWallet.withdraw(amountToExchange);
         toWallet.deposit(amountToReceive);
     }
 
     /**
-     * Adds a wallet to the account's set of wallets and sets the back-reference.
-     * This method ensures the integrity of the aggregate.
-     * @param accountWallet The wallet to add.
+     * Adds a new {@link AccountWallet} to the account.
+     *
+     * <p>This method ensures the bidirectional relationship between the account and the wallet
+     * is correctly established.</p>
+     *
+     * @param accountWallet The wallet to be added to the account.
      */
     void addWallet(AccountWallet accountWallet) {
         accountWallets.add(accountWallet);
@@ -82,39 +75,44 @@ class Account extends AbstractAggregateEntity {
     }
 
     /**
-     * Converts the Account aggregate to its view representation (DTO).
-     * @return An AccountView object.
+     * Converts the {@code Account} entity into its data transfer object (DTO) representation.
+     *
+     * @return An {@link AccountView} containing the account's data.
      */
     AccountView toDto() {
         return AccountView.builder()
-                .accountId(accountId)
-                .firstName(firstName)
-                .lastName(lastName)
+                .accountId(accountId.value())
+                .firstName(personName.firstName())
+                .lastName(personName.lastName())
                 .balances(accountWallets.stream()
                         .map(AccountWallet::toDto).collect(Collectors.toList()))
                 .build();
     }
 
     /**
-     * Finds a wallet by its currency code.
-     * @param currencyCode The currency code to search for.
-     * @return An Optional containing the wallet if found.
+     * Finds a wallet associated with the specified currency.
+     *
+     * @param currency The currency of the wallet to find.
+     * @return An {@link Optional} containing the {@link AccountWallet} if found, otherwise an empty {@code Optional}.
      */
-    private Optional<AccountWallet> findWalletByCurrency(String currencyCode) {
+    private Optional<AccountWallet> findWalletByCurrency(Currency currency) {
         return accountWallets.stream()
-                .filter(wallet -> wallet.hasCurrency(currencyCode))
+                .filter(wallet -> wallet.hasCurrency(currency))
                 .findFirst();
     }
 
     /**
-     * Finds a wallet for the given currency or creates a new one with a zero balance if it doesn't exist.
-     * @param currencyCode The currency code for the wallet.
-     * @return The existing or newly created wallet.
+     * Finds an existing wallet for the specified currency or creates a new one if it does not exist.
+     *
+     * <p>A new wallet is initialized with a zero balance.</p>
+     *
+     * @param currency The currency of the wallet to find or create.
+     * @return The existing or newly created {@link AccountWallet}.
      */
-    private AccountWallet findOrCreateWalletByCurrency(String currencyCode) {
-        return findWalletByCurrency(currencyCode)
+    private AccountWallet findOrCreateWalletByCurrency(Currency currency) {
+        return findWalletByCurrency(currency)
                 .orElseGet(() -> {
-                    AccountWallet newWallet = new AccountWallet(currencyCode, BigDecimal.ZERO);
+                    AccountWallet newWallet = new AccountWallet(new Money(BigDecimal.ZERO, currency));
                     this.addWallet(newWallet);
                     return newWallet;
                 });

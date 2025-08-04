@@ -4,99 +4,101 @@ import com.example.currencyexchange.account.domain.dto.AccountWalletView;
 import com.example.currencyexchange.account.exception.InsufficientFundsException;
 import com.example.currencyexchange.shared.ddd.AbstractEntity;
 import jakarta.persistence.*;
-import jakarta.validation.constraints.NotNull;
-import jakarta.validation.constraints.Size;
 import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
 
-import java.math.BigDecimal;
-
 /**
  * Represents a single currency wallet within a user's account.
  *
- * This entity is an integral part of the {@link Account} aggregate and should not be managed directly.
- * Its lifecycle and operations are controlled by the {@link Account} aggregate root to ensure consistency.
- * Its primary responsibilities are to hold the balance for a specific currency and to provide
- * safe methods for depositing and withdrawing funds, including checking for sufficient balance and respecting balance limits.
+ * <p>This entity is a fundamental part of the {@link Account} aggregate and is not intended for direct management.
+ * Its lifecycle and all operations are controlled by the {@link Account} aggregate root to maintain data consistency.
+ * The wallet's primary role is to manage the balance for a specific currency and provide secure methods for
+ * deposits and withdrawals.</p>
  */
 @Entity
 @Getter(AccessLevel.PACKAGE)
 @NoArgsConstructor(access = AccessLevel.PACKAGE)
 class AccountWallet extends AbstractEntity {
 
-    // Define a constant for the maximum allowed balance to enforce the business rule in the domain.
-    private static final BigDecimal MAX_BALANCE = new BigDecimal("9999999999.99");
+    /**
+     * The balance of the wallet, including the amount and currency.
+     */
+    @Embedded
+    @AttributeOverrides({
+            @AttributeOverride(name = "amount", column = @Column(name = "balance", nullable = false)),
+            @AttributeOverride(name = "currency.code", column = @Column(name = "currencyCode", nullable = false, length = 3))
+    })
+    private Money balance;
 
-    @NotNull
-    @Size(max = 3)
-    @Column(length = 3)
-    private String currencyCode;
-
-    @NotNull
-    private BigDecimal balance;
-
+    /**
+     * A reference back to the parent Account aggregate root.
+     */
     @Setter(AccessLevel.PACKAGE)
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "account_entity_id")
     private Account account;
 
     /**
-     * Package-private constructor for creating a new wallet within the aggregate.
+     * Creates a new wallet with an initial balance.
+     * This constructor should only be called from within the {@link Account} aggregate.
+     *
+     * @param initialBalance The starting balance for the new wallet.
      */
-    AccountWallet(String currencyCode, BigDecimal balance) {
-        if (balance.compareTo(MAX_BALANCE) > 0) {
-            throw new WalletBalanceLimitExceededException("Initial balance exceeds the maximum allowed limit of " + MAX_BALANCE);
-        }
-        this.currencyCode = currencyCode;
-        this.balance = balance;
+    AccountWallet(Money initialBalance) {
+        this.balance = initialBalance;
     }
 
     /**
-     * Decreases the wallet balance by the given amount.
-     * Encapsulates logic and validation.
-     * @param amount The amount to withdraw.
-     * @throws InsufficientFundsException if the balance is insufficient.
+     * Decreases the wallet balance by the specified amount.
+     *
+     * @param amount The {@link Money} object representing the amount to withdraw.
+     * @throws IllegalArgumentException if the currency of the amount does not match the wallet's currency.
+     * @throws InsufficientFundsException if the wallet does not have enough funds.
      */
-    void withdraw(BigDecimal amount) {
-        if (balance.compareTo(amount) < 0) {
-            throw new InsufficientFundsException("Insufficient funds in account " + currencyCode + ". Available balance: " + balance);
+    void withdraw(Money amount) {
+        if (!this.balance.currency().equals(amount.currency())) {
+            throw new IllegalArgumentException("Cannot withdraw a different currency from the wallet.");
+        }
+        if (this.balance.isLessThan(amount)) {
+            throw new InsufficientFundsException("Insufficient funds in " + balance.currency().code() + " wallet. Available balance: " + balance.amount());
         }
         this.balance = this.balance.subtract(amount);
     }
 
     /**
-     * Increases the wallet balance by the given amount.
-     * It also checks if the new balance would exceed the system's maximum limit.
-     * @param amount The amount to deposit.
-     * @throws WalletBalanceLimitExceededException if the resulting balance would exceed the allowed limit.
+     * Increases the wallet balance by the specified amount.
+     *
+     * @param amount The {@link Money} object representing the amount to deposit.
+     * @throws IllegalArgumentException if the currency of the amount does not match the wallet's currency.
      */
-    void deposit(BigDecimal amount) {
-        BigDecimal newBalance = this.balance.add(amount);
-        if (newBalance.compareTo(MAX_BALANCE) > 0) {
-            throw new WalletBalanceLimitExceededException("Operation would cause the balance to exceed the maximum limit of " + MAX_BALANCE);
+    void deposit(Money amount) {
+        if (!this.balance.currency().equals(amount.currency())) {
+            throw new IllegalArgumentException("Cannot deposit a different currency into the wallet.");
         }
-        this.balance = newBalance;
+        this.balance = this.balance.add(amount);
     }
 
     /**
-     * Checks if the wallet is assigned to the given currency code.
-     * @param currencyCode The currency code to check.
-     * @return true if the currency codes match.
+     * Checks if the wallet holds funds in the specified currency.
+     *
+     * @param currency The {@link Currency} to check against.
+     * @return {@code true} if the wallet's currency matches the specified currency, otherwise {@code false}.
      */
-    boolean hasCurrency(String currencyCode) {
-        return this.currencyCode.equalsIgnoreCase(currencyCode);
+    boolean hasCurrency(Currency currency) {
+        return this.balance.currency().equals(currency);
     }
 
     /**
-     * Converts the wallet to its view representation (DTO).
-     * @return An AccountWalletView object.
+     * Converts the {@code AccountWallet} entity into its data transfer object (DTO) representation.
+     *
+     * @return An {@link AccountWalletView} containing the wallet's public data.
      */
     AccountWalletView toDto() {
         return AccountWalletView.builder()
-                .currencyCode(currencyCode)
-                .balance(balance)
+                .currencyCode(balance.currency().code())
+                .balance(balance.amount())
                 .build();
     }
 }

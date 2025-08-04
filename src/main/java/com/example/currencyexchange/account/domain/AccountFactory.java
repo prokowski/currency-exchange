@@ -6,48 +6,47 @@ import lombok.RequiredArgsConstructor;
 
 import java.math.BigDecimal;
 import java.util.HashSet;
-import java.util.UUID;
 
 /**
- * A factory class responsible for creating {@link Account} aggregates.
+ * A factory for creating {@link Account} aggregate roots.
  *
- * It encapsulates the complexity of object creation, ensuring that every new account
- * is instantiated in a consistent and valid state. This includes generating a unique
- * account ID, validating input data, and creating an initial wallet with a PLN balance.
+ * <p>This class encapsulates the logic for constructing a new, valid {@code Account} object.
+ * It ensures that every new account is initialized with a valid name, a positive initial
+ * balance in PLN, and a corresponding wallet. By centralizing the creation logic, it
+ * promotes consistency and adheres to the principles of Domain-Driven Design.</p>
  */
 @RequiredArgsConstructor(access = AccessLevel.PACKAGE)
 class AccountFactory {
 
-    private final static String INITIAL_CURRENCY_CODE = "PLN";
-
+    /**
+     * Creates and initializes a new {@link Account} aggregate.
+     *
+     * <p>This method constructs the necessary Value Objects ({@link PersonName}, {@link Money}),
+     * generates a unique {@link AccountId}, and assembles the {@code Account} aggregate.
+     * It also creates the initial PLN wallet with the specified balance.</p>
+     *
+     * @param firstName         The user's first name. Must not be null.
+     * @param lastName          The user's last name. Must not be null.
+     * @param initialBalancePLN The initial balance in PLN. Must be a positive value.
+     * @return A fully initialized, valid {@link Account} aggregate, ready to be persisted.
+     * @throws InvalidAccountDataException if the initial balance is not greater than zero.
+     */
     Account create(@NonNull String firstName, @NonNull String lastName, @NonNull BigDecimal initialBalancePLN) {
-        validateName(firstName, "First name");
-        validateName(lastName, "Last name");
-        validateInitialBalance(initialBalancePLN);
+        PersonName personName = new PersonName(firstName, lastName);
+
+        if (initialBalancePLN.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new InvalidAccountDataException("Initial balance must be greater than zero.");
+        }
+
+        Money initialMoney = new Money(initialBalancePLN, new Currency("PLN"));
 
         Account account = Account.builder()
-                .accountId(UUID.randomUUID().toString())
-                .firstName(firstName)
-                .lastName(lastName)
+                .accountId(AccountId.generate())
+                .personName(personName)
                 .accountWallets(new HashSet<>())
                 .build();
 
-        account.addWallet(new AccountWallet(INITIAL_CURRENCY_CODE, initialBalancePLN));
+        account.addWallet(new AccountWallet(initialMoney));
         return account;
-    }
-
-    private void validateName(String name, String fieldName) {
-        if (name == null || name.isBlank()) {
-            throw new InvalidAccountDataException(fieldName + " is required.");
-        }
-        if (name.length() > 50) {
-            throw new InvalidAccountDataException(fieldName + " cannot exceed 50 characters.");
-        }
-    }
-
-    private void validateInitialBalance(BigDecimal balance) {
-        if (balance == null || balance.compareTo(BigDecimal.ZERO) <= 0) {
-            throw new InvalidAccountDataException("Initial balance must be greater than zero.");
-        }
     }
 }

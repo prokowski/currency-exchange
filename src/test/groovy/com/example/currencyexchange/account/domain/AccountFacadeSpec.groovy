@@ -2,10 +2,11 @@ package com.example.currencyexchange.account.domain
 
 import com.example.currencyexchange.account.domain.dto.CreateAccountRequest
 import com.example.currencyexchange.account.domain.dto.ExchangeRequest
-import com.example.currencyexchange.account.query.AccountQuery
-import com.example.currencyexchange.infrastructure.nbp.ExchangeRateClient
+import com.example.currencyexchange.account.exception.AccountNotFoundException
 import com.example.currencyexchange.account.exception.InsufficientFundsException
 import com.example.currencyexchange.account.exception.InvalidCurrencyException
+import com.example.currencyexchange.account.query.AccountQuery
+import com.example.currencyexchange.infrastructure.nbp.ExchangeRateClient
 import spock.lang.Specification
 import spock.lang.Unroll
 
@@ -58,11 +59,11 @@ class AccountFacadeSpec extends Specification {
         thrown(InvalidAccountDataException)
 
         where:
-        reason                      | firstName    | lastName   | balance
-        "blank first name"          | ""           | "Kowalski" | new BigDecimal("100.00")
-        "last name too long"        | "Jan"        | "a" * 51   | new BigDecimal("100.00")
-        "zero initial balance"      | "Anna"       | "Nowak"    | BigDecimal.ZERO
-        "negative initial balance"  | "Piotr"      | "Zieliński"| new BigDecimal("-10.00")
+        reason                     | firstName    | lastName   | balance
+        "blank first name"         | ""           | "Kowalski" | new BigDecimal("100.00")
+        "last name too long"       | "Jan"        | "a" * 51   | new BigDecimal("100.00")
+        "zero initial balance"     | "Anna"       | "Nowak"    | BigDecimal.ZERO
+        "negative initial balance" | "Piotr"      | "Zieliński"| new BigDecimal("-10.00")
     }
 
     def "should exchange currencies successfully and return to initial balance"() {
@@ -213,5 +214,47 @@ class AccountFacadeSpec extends Specification {
 
         def usdWallet = finalAccount.getWallets().find { it.getCurrencyCode() == 'USD' }
         usdWallet.getBalance() == new BigDecimal("75.00") // 50 + 25
+    }
+
+    def "should throw exception when trying to exchange on a non-existent account"() {
+        given: "a non-existent account id"
+        def nonExistentId = "ID-THAT-DOES-NOT-EXIST"
+        def request = new ExchangeRequest("PLN", "USD", new BigDecimal("100.00"))
+
+        and: "mocked currency support to pass validation"
+        supportedCurrencyRepository.existsById("PLN") >> true
+
+        when: "an attempt is made to exchange currency for this id"
+        accountFacade.exchangeCurrency(nonExistentId, request)
+
+        then: "an AccountNotFoundException is thrown"
+        thrown(AccountNotFoundException)
+    }
+
+    @Unroll
+    def "should throw exception for invalid exchange amount: #reason"() {
+        given: "an existing account"
+        def accountId = accountFacade.createAccount(new CreateAccountRequest("Valid", "User", new BigDecimal("1000.00"))).getAccountId()
+
+        and: "mocked currency support"
+        supportedCurrencyRepository.existsById("PLN") >> true
+        supportedCurrencyRepository.existsById("USD") >> true
+
+        and: "a mocked exchange rate to avoid NullPointerException"
+        exchangeRateClient.getExchangeRate("PLN", "USD") >> new BigDecimal("4.0") // FIX: Mock the rate client
+
+        and: "an invalid exchange request"
+        def request = new ExchangeRequest("PLN", "USD", amount)
+
+        when: "the exchange is attempted"
+        accountFacade.exchangeCurrency(accountId, request)
+
+        then: "an IllegalArgumentException is thrown"
+        thrown(IllegalArgumentException)
+
+        where:
+        reason                  | amount
+        "zero amount"           | BigDecimal.ZERO
+        "negative amount"       | new BigDecimal("-50.00")
     }
 }

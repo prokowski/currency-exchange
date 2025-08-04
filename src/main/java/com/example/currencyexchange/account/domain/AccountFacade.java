@@ -14,10 +14,13 @@ import org.springframework.transaction.annotation.Transactional;
 import java.math.BigDecimal;
 
 /**
- * The AccountFacade provides a simplified, high-level interface to the account management subsystem.
- * It acts as the primary entry point for application-level services (e.g., controllers)
+ * Provides a simplified, high-level interface to the account management subsystem.
+ *
+ * <p>This facade serves as the primary entry point for application-level services (e.g., controllers)
  * to interact with the account domain. It orchestrates domain objects, repositories, and external
- * services to perform business operations like creating an account or exchanging currency.
+ * services to execute business operations like creating an account or exchanging currency.
+ * It is also responsible for translating data from DTOs into domain-specific Value Objects,
+ * ensuring that the core domain logic operates on rich, validated objects.</p>
  */
 @RequiredArgsConstructor
 public class AccountFacade {
@@ -28,72 +31,96 @@ public class AccountFacade {
     private final AccountFactory accountFactory;
 
     /**
-     * Creates a new account based on the provided request.
-     * <p>
-     * This method uses an {@link AccountFactory} to construct a new {@link Account} aggregate.
-     * It initializes the account with the user's first name, last name, and an initial balance in PLN.
-     * The newly created account is then persisted to the repository.
+     * Creates a new account and persists it.
      *
-     * @param request The request object containing the details for the new account. Must not be null.
+     * <p>This method uses an {@link AccountFactory} to construct a new {@link Account} aggregate.
+     * It initializes the account with the user's first name, last name, and an initial balance in PLN.
+     * The newly created account is then saved to the repository.</p>
+     *
+     * @param request The request DTO containing the details for the new account. Must not be null.
      * @return An {@link AccountView} representing the newly created account.
      */
     @Transactional
     public AccountView createAccount(@NonNull CreateAccountRequest request) {
         Account account = accountFactory.create(request.getFirstName(), request.getLastName(), request.getInitialBalancePLN());
-
         Account savedAccount = accountRepository.save(account);
-
         return savedAccount.toDto();
     }
 
     /**
-     * Executes a currency exchange for a specified account.
-     * <p>
-     * This method orchestrates the entire exchange process. It retrieves the account,
-     * validates that the source and target currencies are supported and different,
-     * fetches the current exchange rate from an external provider, and then delegates
-     * the core exchange logic to the Account aggregate. Finally, it persists the
-     * updated state of the account.
+     * Executes a currency exchange operation for a specified account.
      *
-     * @param accountId The unique identifier for the account. Must not be null.
-     * @param request   The exchange request details, including from/to currencies and amount. Must not be null.
+     * <p>This method orchestrates the entire exchange process. It performs the following steps:
+     * <ol>
+     * <li>Translates raw input from the {@link ExchangeRequest} into rich domain Value Objects (AccountId, Money, Currency).</li>
+     * <li>Validates that the source and target currencies are supported and are not the same.</li>
+     * <li>Retrieves the {@link Account} aggregate from the repository.</li>
+     * <li>Fetches the current exchange rate from an external provider.</li>
+     * <li>Delegates the core exchange logic to the {@link Account} aggregate's business method.</li>
+     * <li>Persists the updated state of the account.</li>
+     * </ol>
+     * </p>
+     *
+     * @param accountIdValue The unique identifier for the account as a String. Must not be null.
+     * @param request        The DTO with exchange details (from/to currencies, amount). Must not be null.
      * @return An {@link AccountView} representing the updated state of the account after the exchange.
-     * @throws AccountNotFoundException if the account with the specified ID does not exist.
-     * @throws InvalidCurrencyException if the currencies are invalid or not supported.
+     * @throws AccountNotFoundException if no account with the specified ID exists.
+     * @throws InvalidCurrencyException if any currency is invalid, unsupported, or if both currencies are the same.
      */
     @Transactional
-    public AccountView exchangeCurrency(@NotNull String accountId, @NonNull ExchangeRequest request) {
+    public AccountView exchangeCurrency(@NotNull String accountIdValue, @NonNull ExchangeRequest request) {
+        if (request.getAmount().compareTo(BigDecimal.ZERO) <= 0) {
+            throw new IllegalArgumentException("Exchange amount must be positive.");
+        }
 
-        Account account = accountRepository.findByAccountId(accountId)
-                .orElseThrow(() -> new AccountNotFoundException("Account with ID " + accountId + " not found."));
+        Account account = findAccountById(accountIdValue);
 
-        String fromCurrency = request.getFromCurrency().toUpperCase();
-        String toCurrency = request.getToCurrency().toUpperCase();
+        Currency fromCurrency = new Currency(request.getFromCurrency());
+        Currency toCurrency = new Currency(request.getToCurrency());
+        Money amountToExchange = new Money(request.getAmount(), fromCurrency);
 
         validateCurrencies(fromCurrency, toCurrency);
 
-        BigDecimal rate = exchangeRateClient.getExchangeRate(fromCurrency, toCurrency);
 
-        account.exchange(fromCurrency, toCurrency, request.getAmount(), rate);
+        BigDecimal rateValue = exchangeRateClient.getExchangeRate(fromCurrency.code(), toCurrency.code());
+        ExchangeRate rate = new ExchangeRate(fromCurrency, toCurrency, rateValue);
 
-        // Saving is handled by the transactional context, but an explicit save is more readable.
+        account.exchange(amountToExchange, rate);
+
         Account savedAccount = accountRepository.save(account);
-
         return savedAccount.toDto();
     }
 
-    private void validateCurrencies(String fromCurrency, String toCurrency) {
-        validateCurrency(fromCurrency);
-        validateCurrency(toCurrency);
+    private Account findAccountById(String accountId) {
+        return accountRepository.findByAccountId(new AccountId(accountId))
+                .orElseThrow(() -> new AccountNotFoundException("Account with id " + accountId + " not found."));
+    }
+
+    /**
+     * Validates that both source and target currencies are supported and are different from each other.
+     *
+     * @param fromCurrency The source currency.
+     * @param toCurrency   The target currency.
+     * @throws InvalidCurrencyException if validation fails.
+     */
+    private void validateCurrencies(Currency fromCurrency, Currency toCurrency) {
+        validateCurrencyIsSupported(fromCurrency);
+        validateCurrencyIsSupported(toCurrency);
 
         if (fromCurrency.equals(toCurrency)) {
             throw new InvalidCurrencyException("Source and target currency cannot be the same.");
         }
     }
 
-    private void validateCurrency(String currencyCode) {
-        if (!supportedCurrencyRepository.existsById(currencyCode)) {
-            throw new InvalidCurrencyException("Currency " + currencyCode + " is not supported.");
+    /**
+     * Checks if a given currency is supported by the system.
+     *
+     * @param currency The currency to validate.
+     * @throws InvalidCurrencyException if the currency is not supported.
+     */
+    private void validateCurrencyIsSupported(Currency currency) {
+        if (!supportedCurrencyRepository.existsById(currency.code())) {
+            throw new InvalidCurrencyException("Currency " + currency.code() + " is not supported.");
         }
     }
 }
