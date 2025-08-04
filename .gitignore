@@ -1,0 +1,55 @@
+# ===================================================================
+# Build files and output directories
+# ===================================================================
+build/
+.gradle/
+out/
+
+# ===================================================================
+# Local Database Files
+# ===================================================================
+# Ignore the H2 database files stored in the /data directory
+/data/
+
+# ===================================================================
+# IDE specific files
+# ===================================================================
+# IntelliJ IDEA
+.idea/
+*.iml
+*.iws
+*.ipr
+
+# Eclipse / STS
+.classpath
+.project
+.settings
+.factorypath
+.apt_generated
+.springBeans
+.sts4-cache
+bin/
+
+# NetBeans
+/nbproject/private/
+/nbbuild/
+/dist/
+/nbdist/
+/.nb-gradle/
+
+# VS Code
+.vscode/
+
+# ===================================================================
+# Log files
+# ===================================================================
+*.log
+
+# ===================================================================
+# Operating System files
+# ===================================================================
+# macOS
+.DS_Store
+
+# Windows
+Thumbs.db

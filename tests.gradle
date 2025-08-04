@@ -1,0 +1,44 @@
+// This defines a new 'integration' source set, telling Gradle where to find integration test files.
+sourceSets {
+    integration {
+        // Explicitly configure the classpaths.
+        // Use 'testRuntimeClasspath' which is resolvable and contains all necessary dependencies.
+        compileClasspath += sourceSets.main.output + configurations.testRuntimeClasspath
+        runtimeClasspath += sourceSets.main.output + sourceSets.test.output + configurations.testRuntimeClasspath
+
+        java {
+            srcDir('src/integration/java')
+        }
+        groovy {
+            srcDir('src/integration/groovy')
+        }
+    }
+}
+
+// Configure logging and JUnit Platform for all tasks of type Test (includes 'test' and 'integration').
+tasks.withType(Test) {
+    useJUnitPlatform()
+    testLogging {
+        events = ["passed", "failed", "skipped"]
+        exceptionFormat = "short"
+
+        debug {
+            events = ["started", "skipped", "failed"]
+            exceptionFormat = "full"
+        }
+
+        info.events = ["started", "passed", "failed", "skipped"]
+    }
+}
+
+// Define the custom 'integration' task using the modern 'register' method.
+tasks.register('integration', Test) {
+    description = 'Runs the integration tests.'
+    group = 'Verification'
+    testClassesDirs = sourceSets.integration.output.classesDirs
+    classpath = sourceSets.integration.runtimeClasspath
+}
+
+// Define task execution order.
+check.dependsOn(integration)
+integration.mustRunAfter(test)
